@@ -180,9 +180,13 @@ func main() {
 
 func replay(ctx context.Context, cfg config, logger *slog.Logger, rdb *redis.Client, db *store, args []string) error {
 	if len(args) == 0 || args[0] == "" {
-		return errors.New("usage: mapper replay <domain> [redis-output-queue]")
+		return errors.New("usage: mapper replay <domain-or-url> [redis-output-queue]")
 	}
-	domain := args[0]
+	requested := args[0]
+	domain, err := replayDomainKey(requested, cfg.SameDomainMode)
+	if err != nil {
+		return err
+	}
 	queue := cfg.OutputQueue
 	if len(args) > 1 && args[1] != "" {
 		queue = args[1]
@@ -198,8 +202,23 @@ func replay(ctx context.Context, cfg config, logger *slog.Logger, rdb *redis.Cli
 	if err != nil {
 		return err
 	}
-	logger.Info("replay finished", "domain", domain, "queue", queue, "urls", total)
+	logger.Info("replay finished", "requested", requested, "domain", domain, "queue", queue, "urls", total)
 	return nil
+}
+
+func replayDomainKey(raw string, mode string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", errors.New("missing replay domain")
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + strings.Trim(raw, "/")
+	}
+	u, err := normalizeURL(raw, nil)
+	if err != nil {
+		return "", err
+	}
+	return domainForURL(u, mode)
 }
 
 type crawlStats struct {

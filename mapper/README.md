@@ -55,7 +55,7 @@ Replay a stored sitemap into Redis without crawling again:
 docker compose run --rm mapper replay example.com mapper:out
 ```
 
-The first argument is the stored domain key. With the default `SAME_DOMAIN_MODE=registrable`, use values like `example.com`; with `SAME_DOMAIN_MODE=host`, use values like `www.example.com`. Replay pushes every stored URL for that domain, including the original seed URL, to the selected Redis queue.
+The first argument can be either the original seed URL, a host, or the stored domain key. With the default `SAME_DOMAIN_MODE=registrable`, `https://ui.shadcn.com`, `ui.shadcn.com`, and `shadcn.com` all resolve to the stored key `shadcn.com`. Replay pushes every stored URL for that domain, including the original seed URL, to the selected Redis queue.
 
 Redis visited sets are runtime de-duplication state. If you intentionally want to remap a domain from scratch instead of replaying the Postgres sitemap, delete its `mapper:visited:<domain-hash>` key before reseeding.
 

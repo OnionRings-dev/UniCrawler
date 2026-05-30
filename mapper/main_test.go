@@ -39,3 +39,28 @@ func TestExtractLinksIgnoresAssets(t *testing.T) {
 		t.Fatalf("extractLinks() = %#v, want %#v", got, want)
 	}
 }
+
+func TestReplayDomainKey(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		mode string
+		want string
+	}{
+		{name: "url registrable", raw: "https://ui.shadcn.com/docs", mode: "registrable", want: "shadcn.com"},
+		{name: "host registrable", raw: "ui.shadcn.com", mode: "registrable", want: "shadcn.com"},
+		{name: "host mode", raw: "ui.shadcn.com", mode: "host", want: "ui.shadcn.com"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := replayDomainKey(tt.raw, tt.mode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("replayDomainKey() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
