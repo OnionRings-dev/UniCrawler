@@ -32,6 +32,7 @@ type config struct {
 	RedisPassword   string
 	RedisDB         int
 	RedisPoolSize   int
+	PostgresDSN     string
 	InputQueue      string
 	OutputQueue     string
 	VisitedPrefix   string
@@ -49,6 +50,8 @@ type crawlJob struct {
 	Seed       *url.URL
 	DomainKey  string
 	VisitedKey string
+	DomainID   int64
+	RunID      int64
 }
 
 func main() {
@@ -69,6 +72,21 @@ func main() {
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		logger.Error("redis ping failed", "err", err)
 		os.Exit(1)
+	}
+
+	db, err := openStore(ctx, cfg.PostgresDSN)
+	if err != nil {
+		logger.Error("postgres connection failed", "err", err)
+		os.Exit(1)
+	}
+	defer db.close()
+
+	if len(os.Args) > 1 && os.Args[1] == "replay" {
+		if err := replay(ctx, cfg, logger, rdb, db, os.Args[2:]); err != nil {
+			logger.Error("replay failed", "err", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	client := &http.Client{
@@ -125,16 +143,63 @@ func main() {
 		}
 
 		logger.Info("crawl started", "seed", seed.String(), "domain", job.DomainKey)
-		stats := crawl(ctx, cfg, logger, rdb, client, job)
+		domain, err := db.upsertDomain(ctx, job.DomainKey)
+		if err != nil {
+			logger.Error("domain upsert failed", "domain", job.DomainKey, "err", err)
+			continue
+		}
+		run, err := db.startRun(ctx, domain.ID, seed.String())
+		if err != nil {
+			logger.Error("crawl run create failed", "domain", job.DomainKey, "err", err)
+			continue
+		}
+		if err := db.upsertURLs(ctx, domain.ID, run.ID, []string{seed.String()}); err != nil {
+			logger.Error("seed url upsert failed", "domain", job.DomainKey, "err", err)
+			continue
+		}
+		job.DomainID = domain.ID
+		job.RunID = run.ID
+
+		stats := crawl(ctx, cfg, logger, rdb, db, client, job)
+		finishCtx, finishCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := db.finishRun(finishCtx, run.ID, runStatus(ctx), stats); err != nil {
+			logger.Error("crawl run finish failed", "run_id", run.ID, "err", err)
+		}
+		finishCancel()
 		logger.Info("crawl finished",
 			"seed", seed.String(),
 			"domain", job.DomainKey,
+			"run_id", run.ID,
 			"pages", stats.Pages,
 			"links", stats.Links,
 			"errors", stats.Errors,
 			"duration", stats.Duration.String(),
 		)
 	}
+}
+
+func replay(ctx context.Context, cfg config, logger *slog.Logger, rdb *redis.Client, db *store, args []string) error {
+	if len(args) == 0 || args[0] == "" {
+		return errors.New("usage: mapper replay <domain> [redis-output-queue]")
+	}
+	domain := args[0]
+	queue := cfg.OutputQueue
+	if len(args) > 1 && args[1] != "" {
+		queue = args[1]
+	}
+
+	total, err := db.replayDomain(ctx, domain, cfg.BatchSize, func(batch []string) error {
+		items := make([]interface{}, len(batch))
+		for i, raw := range batch {
+			items[i] = raw
+		}
+		return rdb.RPush(ctx, queue, items...).Err()
+	})
+	if err != nil {
+		return err
+	}
+	logger.Info("replay finished", "domain", domain, "queue", queue, "urls", total)
+	return nil
 }
 
 type crawlStats struct {
@@ -144,17 +209,28 @@ type crawlStats struct {
 	Duration time.Duration
 }
 
-func crawl(ctx context.Context, cfg config, logger *slog.Logger, rdb *redis.Client, client *http.Client, job crawlJob) crawlStats {
+func crawl(ctx context.Context, cfg config, logger *slog.Logger, rdb *redis.Client, db *store, client *http.Client, job crawlJob) crawlStats {
 	started := time.Now()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	frontier := newURLQueue()
 	discovered := make(chan string, cfg.BatchSize*2)
-	var pending sync.WaitGroup
+	persisted := make(chan []string, cfg.Workers)
 	var workers sync.WaitGroup
 	var stats crawlStats
 	var statsMu sync.Mutex
+
+	var dbWriter sync.WaitGroup
+	dbWriter.Add(1)
+	go func() {
+		defer dbWriter.Done()
+		for urls := range persisted {
+			if err := db.upsertURLs(ctx, job.DomainID, job.RunID, urls); err != nil && ctx.Err() == nil {
+				logger.Error("postgres url upsert failed", "run_id", job.RunID, "items", len(urls), "err", err)
+			}
+		}
+	}()
 
 	addURLs := func(urls []*url.URL) []string {
 		if len(urls) == 0 {
@@ -192,9 +268,16 @@ func crawl(ctx context.Context, cfg config, logger *slog.Logger, rdb *redis.Clie
 				continue
 			}
 			u := unique[raw]
-			pending.Add(1)
-			frontier.push(u)
-			added = append(added, raw)
+			if frontier.push(u) {
+				added = append(added, raw)
+			}
+		}
+		if len(added) > 0 {
+			select {
+			case persisted <- added:
+			case <-ctx.Done():
+				return nil
+			}
 		}
 		return added
 	}
@@ -223,6 +306,7 @@ func crawl(ctx context.Context, cfg config, logger *slog.Logger, rdb *redis.Clie
 	seedAdded := addURL(job.Seed)
 	if !seedAdded {
 		logger.Info("seed already mapped", "seed", job.Seed.String(), "visited_key", job.VisitedKey)
+		frontier.close()
 	}
 
 	var writer sync.WaitGroup
@@ -232,10 +316,6 @@ func crawl(ctx context.Context, cfg config, logger *slog.Logger, rdb *redis.Clie
 		flushLinks(ctx, rdb, cfg.OutputQueue, cfg.BatchSize, discovered, logger)
 	}()
 
-	go func() {
-		pending.Wait()
-		frontier.close()
-	}()
 	go func() {
 		<-ctx.Done()
 		frontier.close()
@@ -255,7 +335,7 @@ func crawl(ctx context.Context, cfg config, logger *slog.Logger, rdb *redis.Clie
 					statsMu.Lock()
 					stats.Errors++
 					statsMu.Unlock()
-					pending.Done()
+					frontier.done()
 					continue
 				}
 				statsMu.Lock()
@@ -272,10 +352,10 @@ func crawl(ctx context.Context, cfg config, logger *slog.Logger, rdb *redis.Clie
 				}
 				added := addURLs(candidates)
 				if !sendDiscovered(added) {
-					pending.Done()
+					frontier.done()
 					return
 				}
-				pending.Done()
+				frontier.done()
 			}
 		}()
 	}
@@ -283,6 +363,8 @@ func crawl(ctx context.Context, cfg config, logger *slog.Logger, rdb *redis.Clie
 	workers.Wait()
 	close(discovered)
 	writer.Wait()
+	close(persisted)
+	dbWriter.Wait()
 
 	statsMu.Lock()
 	stats.Duration = time.Since(started)
@@ -292,11 +374,12 @@ func crawl(ctx context.Context, cfg config, logger *slog.Logger, rdb *redis.Clie
 }
 
 type urlQueue struct {
-	mu     sync.Mutex
-	cond   *sync.Cond
-	items  []*url.URL
-	head   int
-	closed bool
+	mu          sync.Mutex
+	cond        *sync.Cond
+	items       []*url.URL
+	head        int
+	outstanding int
+	closed      bool
 }
 
 func newURLQueue() *urlQueue {
@@ -305,13 +388,16 @@ func newURLQueue() *urlQueue {
 	return q
 }
 
-func (q *urlQueue) push(u *url.URL) {
+func (q *urlQueue) push(u *url.URL) bool {
 	q.mu.Lock()
+	defer q.mu.Unlock()
 	if !q.closed {
 		q.items = append(q.items, u)
+		q.outstanding++
 		q.cond.Signal()
+		return true
 	}
-	q.mu.Unlock()
+	return false
 }
 
 func (q *urlQueue) pop() (*url.URL, bool) {
@@ -338,6 +424,18 @@ func (q *urlQueue) close() {
 	q.mu.Lock()
 	q.closed = true
 	q.cond.Broadcast()
+	q.mu.Unlock()
+}
+
+func (q *urlQueue) done() {
+	q.mu.Lock()
+	if q.outstanding > 0 {
+		q.outstanding--
+	}
+	if q.outstanding == 0 {
+		q.closed = true
+		q.cond.Broadcast()
+	}
 	q.mu.Unlock()
 }
 
@@ -527,6 +625,7 @@ func loadConfig() config {
 		RedisPassword:   envString("REDIS_PASSWORD", ""),
 		RedisDB:         envInt("REDIS_DB", 0),
 		RedisPoolSize:   envInt("REDIS_POOL_SIZE", envInt("WORKERS", 128)*2),
+		PostgresDSN:     envString("POSTGRES_DSN", "postgres://unicrawler:unicrawler@postgres:5432/unicrawler?sslmode=disable"),
 		InputQueue:      envString("INPUT_QUEUE", "mapper:in"),
 		OutputQueue:     envString("OUTPUT_QUEUE", "mapper:out"),
 		VisitedPrefix:   envString("VISITED_PREFIX", "mapper:visited"),
