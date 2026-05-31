@@ -22,7 +22,23 @@ Output items are JSON and are only emitted for new or changed content:
   "document_id": 123,
   "content_hash": "bf2c...",
   "changed": true,
-  "parsed_at": "2026-05-31T12:00:00Z"
+  "parsed_at": "2026-05-31T12:00:00Z",
+  "document_type": "html"
+}
+```
+
+PDF output includes the original PDF URL in `url` and the page where that PDF link was found in `source_url`:
+
+```json
+{
+  "url": "https://example.com/files/menu.pdf",
+  "domain": "example.com",
+  "document_id": 456,
+  "content_hash": "ab12...",
+  "changed": true,
+  "parsed_at": "2026-05-31T12:01:00Z",
+  "document_type": "pdf",
+  "source_url": "https://example.com/menu"
 }
 ```
 
@@ -32,7 +48,7 @@ The default backend is custom Go code using `chromedp` and Chromium installed in
 
 This keeps Docker Compose simple while still supporting JavaScript-rendered pages. Scale large workloads by tuning `WORKERS`, running multiple parser replicas, and increasing Redis/Postgres capacity.
 
-Direct asset URLs such as images, videos, fonts, archives, feeds, and PDFs are skipped before Chromium. Mapper output can include those when a site links media files from anchors; they are not useful Markdown documents and should not consume render retries.
+Direct asset URLs such as images, videos, fonts, archives, feeds, and Office files are skipped before Chromium. PDF URLs are handled separately: the parser fetches the PDF, extracts text, stores Markdown, and records the page URL where the PDF was found when it was discovered from rendered HTML.
 
 ## Postgres Storage
 
@@ -40,6 +56,7 @@ The parser extends the existing database with:
 
 - `page_documents`: one current document row per normalized URL/domain.
 - `page_document_versions`: immutable Markdown versions keyed by content hash.
+- `page_document_sources`: source pages where linked documents such as PDFs were found.
 - `page_parse_errors`: render/extraction failures.
 
 `page_documents.latest_content_hash` points at the last successful content hash. If a later parse produces the same hash, no new version is inserted and nothing is pushed to `parser:out`.
@@ -56,8 +73,12 @@ Environment variables:
 - `INPUT_QUEUE`, default `mapper:out`
 - `OUTPUT_QUEUE`, default `parser:out`
 - `WORKERS`, default `8`
+- `PARSER_REPLICAS`, Compose-only parser replica count, default `1`
+- `PARSER_WORKERS`, Compose-only `WORKERS` value per parser replica, default `4`
+- `PARSER_REDIS_POOL_SIZE`, Compose-only Redis pool size per parser replica, default `8`
 - `REQUEST_TIMEOUT`, default `15s`; Compose uses `30s` for heavier public sites
 - `RENDER_TIMEOUT`, default `30s`; Compose uses `60s` for heavier public sites
+- `MAX_PDF_BYTES`, default `52428800`
 - `MAX_RETRIES`, default `2`
 - `USER_AGENT`, default `UniCrawlerParser/0.1`
 - `QUEUE_BLOCK_TIME`, default `5s`
@@ -70,6 +91,24 @@ Start the stack:
 
 ```sh
 docker compose up --build
+```
+
+By default Compose starts 1 parser replica with 4 workers. Total parser concurrency is roughly:
+
+```text
+PARSER_REPLICAS * PARSER_WORKERS
+```
+
+Override it when starting the stack:
+
+```sh
+PARSER_REPLICAS=2 PARSER_WORKERS=4 PARSER_REDIS_POOL_SIZE=8 docker compose up -d --build
+```
+
+Increase gradually. Chromium is memory-heavy, and too many tabs can make renders slower rather than faster. You can also change only the replica count at runtime:
+
+```sh
+docker compose up -d --scale parser=2
 ```
 
 Push a URL directly into the parser input queue:

@@ -61,13 +61,16 @@ services:
       POSTGRES_DSN: postgres://unicrawler:unicrawler@postgres:5432/unicrawler?sslmode=disable
       INPUT_QUEUE: mapper:out
       OUTPUT_QUEUE: parser:out
-      WORKERS: "8"
-      REDIS_POOL_SIZE: "16"
+      WORKERS: "${PARSER_WORKERS:-4}"
+      REDIS_POOL_SIZE: "${PARSER_REDIS_POOL_SIZE:-8}"
       REQUEST_TIMEOUT: 30s
       RENDER_TIMEOUT: 60s
+      MAX_PDF_BYTES: "52428800"
       MAX_RETRIES: "2"
       USER_AGENT: UniCrawlerParser/0.1
     shm_size: "1gb"
+    deploy:
+      replicas: ${PARSER_REPLICAS:-1}
     restart: unless-stopped
 
 volumes:

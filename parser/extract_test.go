@@ -56,6 +56,26 @@ func TestLooksLikeCookieConsent(t *testing.T) {
 	}
 }
 
+func TestExtractPDFLinks(t *testing.T) {
+	raw := `<html><body>
+		<a href="/docs/menu.pdf">menu</a>
+		<a href="https://cdn.example.com/file.PDF?x=1">file</a>
+		<a href="/about">about</a>
+		<img src="/image.pdf">
+	</body></html>`
+	got := extractPDFLinks(raw, "https://example.com/pages/source")
+	if len(got) != 2 {
+		t.Fatalf("extractPDFLinks() returned %d links, want 2: %#v", len(got), got)
+	}
+	seen := make(map[string]bool)
+	for _, link := range got {
+		seen[link.String()] = true
+	}
+	if !seen["https://example.com/docs/menu.pdf"] || !seen["https://cdn.example.com/file.PDF?x=1"] {
+		t.Fatalf("unexpected pdf links: %#v", seen)
+	}
+}
+
 func TestCleanMarkdownCollapsesBlankLines(t *testing.T) {
 	got := cleanMarkdown("a\n\n\nb  \n\n")
 	want := "a\n\nb"

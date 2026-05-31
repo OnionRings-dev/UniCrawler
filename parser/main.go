@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
@@ -37,6 +39,7 @@ type config struct {
 	QueueBlockTime time.Duration
 	ChromePath     string
 	RemoteDebugURL string
+	MaxPDFBytes    int64
 }
 
 type parseJob struct {
@@ -44,12 +47,14 @@ type parseJob struct {
 }
 
 type parserOutputMessage struct {
-	URL         string    `json:"url"`
-	Domain      string    `json:"domain"`
-	DocumentID  int64     `json:"document_id"`
-	ContentHash string    `json:"content_hash"`
-	Changed     bool      `json:"changed"`
-	ParsedAt    time.Time `json:"parsed_at"`
+	URL          string    `json:"url"`
+	Domain       string    `json:"domain"`
+	DocumentID   int64     `json:"document_id"`
+	ContentHash  string    `json:"content_hash"`
+	Changed      bool      `json:"changed"`
+	ParsedAt     time.Time `json:"parsed_at"`
+	DocumentType string    `json:"document_type"`
+	SourceURL    string    `json:"source_url,omitempty"`
 }
 
 func main() {
@@ -85,6 +90,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer renderer.Close()
+	client := newHTTPClient(cfg)
 
 	logger.Info("parser ready",
 		"redis", cfg.RedisAddr,
@@ -101,7 +107,7 @@ func main() {
 		go func() {
 			defer wg.Done()
 			for job := range jobs {
-				processJob(ctx, cfg, logger, rdb, db, renderer, workerID, job)
+				processJob(ctx, cfg, logger, rdb, db, renderer, client, workerID, job)
 			}
 		}()
 	}
@@ -133,7 +139,7 @@ func main() {
 	logger.Info("parser stopped")
 }
 
-func processJob(ctx context.Context, cfg config, logger *slog.Logger, rdb *redis.Client, db *store, renderer Renderer, workerID int, job parseJob) {
+func processJob(ctx context.Context, cfg config, logger *slog.Logger, rdb *redis.Client, db *store, renderer Renderer, client *http.Client, workerID int, job parseJob) {
 	normalized, err := normalizeURL(job.RawURL)
 	if err != nil {
 		logger.Warn("discarding invalid url", "value", job.RawURL, "err", err)
@@ -145,8 +151,12 @@ func processJob(ctx context.Context, cfg config, logger *slog.Logger, rdb *redis
 		return
 	}
 	urlHash := hashBytes(normalized.String())
-	if isUnsupportedDocumentURL(normalized) {
+	if isSkippedAssetURL(normalized) {
 		logger.Info("skipping unsupported document url", "url", normalized.String(), "worker", workerID)
+		return
+	}
+	if isPDFURL(normalized) {
+		processPDFJob(ctx, cfg, logger, rdb, db, client, workerID, normalized, "")
 		return
 	}
 
@@ -184,18 +194,19 @@ func processJob(ctx context.Context, cfg config, logger *slog.Logger, rdb *redis
 
 	now := time.Now().UTC()
 	record := pageRecord{
-		URL:         normalized.String(),
-		URLHash:     urlHash,
-		Domain:      domain,
-		Title:       firstNonEmpty(extracted.Title, rendered.Title),
-		Language:    rendered.Language,
-		Markdown:    extracted.Markdown,
-		ContentHash: hashBytes(extracted.Markdown),
-		HTMLHash:    hashBytes(rendered.HTML),
-		StatusCode:  rendered.StatusCode,
-		ContentType: rendered.ContentType,
-		FinalURL:    rendered.FinalURL,
-		ParsedAt:    now,
+		URL:          normalized.String(),
+		URLHash:      urlHash,
+		Domain:       domain,
+		Title:        firstNonEmpty(extracted.Title, rendered.Title),
+		Language:     rendered.Language,
+		Markdown:     extracted.Markdown,
+		ContentHash:  hashBytes(extracted.Markdown),
+		HTMLHash:     hashBytes(rendered.HTML),
+		StatusCode:   rendered.StatusCode,
+		ContentType:  rendered.ContentType,
+		FinalURL:     rendered.FinalURL,
+		ParsedAt:     now,
+		DocumentType: "html",
 	}
 
 	storeCtx, cancel := storeContext()
@@ -205,18 +216,22 @@ func processJob(ctx context.Context, cfg config, logger *slog.Logger, rdb *redis
 		logger.Error("parsed page save failed", "url", normalized.String(), "err", err)
 		return
 	}
+	for _, pdfURL := range extractPDFLinks(rendered.HTML, rendered.FinalURL) {
+		processPDFJob(ctx, cfg, logger, rdb, db, client, workerID, pdfURL, normalized.String())
+	}
 	if !result.Changed {
 		logger.Info("page unchanged", "url", normalized.String(), "document_id", result.DocumentID)
 		return
 	}
 
 	msg := parserOutputMessage{
-		URL:         normalized.String(),
-		Domain:      domain,
-		DocumentID:  result.DocumentID,
-		ContentHash: hex.EncodeToString(record.ContentHash),
-		Changed:     true,
-		ParsedAt:    now,
+		URL:          normalized.String(),
+		Domain:       domain,
+		DocumentID:   result.DocumentID,
+		ContentHash:  hex.EncodeToString(record.ContentHash),
+		Changed:      true,
+		ParsedAt:     now,
+		DocumentType: "html",
 	}
 	payload, err := json.Marshal(msg)
 	if err != nil {
@@ -228,6 +243,83 @@ func processJob(ctx context.Context, cfg config, logger *slog.Logger, rdb *redis
 		return
 	}
 	logger.Info("page changed", "url", normalized.String(), "document_id", result.DocumentID, "version_id", result.VersionID)
+}
+
+func processPDFJob(ctx context.Context, cfg config, logger *slog.Logger, rdb *redis.Client, db *store, client *http.Client, workerID int, pdfURL *url.URL, sourceURL string) {
+	domain, err := domainForURL(pdfURL)
+	if err != nil {
+		logger.Warn("discarding pdf without valid domain", "url", pdfURL.String(), "err", err)
+		return
+	}
+	urlHash := hashBytes(pdfURL.String())
+
+	var parsed parsedPDF
+	err = withRetries(ctx, cfg.MaxRetries, func(attempt int) error {
+		attemptCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
+		defer cancel()
+		var parseErr error
+		parsed, parseErr = fetchAndParsePDF(attemptCtx, client, pdfURL.String(), cfg.UserAgent, cfg.MaxPDFBytes)
+		if parseErr != nil {
+			logger.Warn("pdf parse failed", "url", pdfURL.String(), "source_url", sourceURL, "attempt", attempt, "err", parseErr)
+		}
+		return parseErr
+	})
+	if err != nil {
+		storeCtx, cancel := storeContext()
+		defer cancel()
+		if saveErr := db.recordParseError(storeCtx, pdfURL.String(), urlHash, domain, err.Error()); saveErr != nil {
+			logger.Error("pdf parse error save failed", "url", pdfURL.String(), "err", saveErr)
+		}
+		logger.Error("pdf parse failed", "url", pdfURL.String(), "source_url", sourceURL, "worker", workerID, "err", err)
+		return
+	}
+
+	now := time.Now().UTC()
+	record := pageRecord{
+		URL:          pdfURL.String(),
+		URLHash:      urlHash,
+		Domain:       domain,
+		Title:        parsed.Title,
+		Markdown:     parsed.Markdown,
+		ContentHash:  hashBytes(parsed.Markdown),
+		StatusCode:   parsed.StatusCode,
+		ContentType:  parsed.ContentType,
+		FinalURL:     parsed.FinalURL,
+		ParsedAt:     now,
+		DocumentType: "pdf",
+		SourceURL:    sourceURL,
+	}
+	storeCtx, cancel := storeContext()
+	defer cancel()
+	result, err := db.saveParsedPage(storeCtx, record)
+	if err != nil {
+		logger.Error("parsed pdf save failed", "url", pdfURL.String(), "source_url", sourceURL, "err", err)
+		return
+	}
+	if !result.Changed {
+		logger.Info("pdf unchanged", "url", pdfURL.String(), "source_url", sourceURL, "document_id", result.DocumentID)
+		return
+	}
+	msg := parserOutputMessage{
+		URL:          pdfURL.String(),
+		Domain:       domain,
+		DocumentID:   result.DocumentID,
+		ContentHash:  hex.EncodeToString(record.ContentHash),
+		Changed:      true,
+		ParsedAt:     now,
+		DocumentType: "pdf",
+		SourceURL:    sourceURL,
+	}
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		logger.Error("pdf output message marshal failed", "url", pdfURL.String(), "err", err)
+		return
+	}
+	if err := rdb.RPush(ctx, cfg.OutputQueue, payload).Err(); err != nil {
+		logger.Error("pdf output queue write failed", "url", pdfURL.String(), "err", err)
+		return
+	}
+	logger.Info("pdf changed", "url", pdfURL.String(), "source_url", sourceURL, "document_id", result.DocumentID, "version_id", result.VersionID)
 }
 
 func withRetries(ctx context.Context, maxRetries int, fn func(attempt int) error) error {
@@ -332,19 +424,23 @@ func domainForURL(u *url.URL) (string, error) {
 	return registrable, nil
 }
 
-func isUnsupportedDocumentURL(u *url.URL) bool {
+func isSkippedAssetURL(u *url.URL) bool {
 	ext := strings.ToLower(path.Ext(u.EscapedPath()))
 	switch ext {
 	case ".7z", ".aac", ".avi", ".avif", ".bmp", ".bz2", ".css", ".csv", ".doc", ".docx",
 		".eot", ".epub", ".flac", ".gif", ".gz", ".ico", ".jpeg", ".jpg", ".js", ".json",
 		".m4a", ".m4v", ".mov", ".mp3", ".mp4", ".mpeg", ".mpg", ".ogg", ".ogv", ".otf",
-		".pdf", ".png", ".ppt", ".pptx", ".rar", ".rss", ".svg", ".tar", ".tif", ".tiff",
+		".png", ".ppt", ".pptx", ".rar", ".rss", ".svg", ".tar", ".tif", ".tiff",
 		".ttf", ".txt", ".wav", ".webm", ".webp", ".woff", ".woff2", ".xls", ".xlsx",
 		".xml", ".zip":
 		return true
 	default:
 		return false
 	}
+}
+
+func isPDFURL(u *url.URL) bool {
+	return strings.EqualFold(path.Ext(u.EscapedPath()), ".pdf")
 }
 
 func hashBytes(value string) []byte {
@@ -362,6 +458,25 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func newHTTPClient(cfg config) *http.Client {
+	return &http.Client{
+		Timeout: cfg.RequestTimeout,
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			MaxIdleConns:          cfg.Workers * 4,
+			MaxIdleConnsPerHost:   cfg.Workers * 2,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			ForceAttemptHTTP2:     true,
+		},
+	}
 }
 
 func storeContext() (context.Context, context.CancelFunc) {
@@ -386,6 +501,7 @@ func loadConfig() config {
 		QueueBlockTime: envDuration("QUEUE_BLOCK_TIME", 5*time.Second),
 		ChromePath:     envString("CHROME_PATH", ""),
 		RemoteDebugURL: envString("RENDER_REMOTE_DEBUG_URL", ""),
+		MaxPDFBytes:    int64(envInt("MAX_PDF_BYTES", 50<<20)),
 	}
 }
 

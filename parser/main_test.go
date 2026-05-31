@@ -44,13 +44,13 @@ func TestHashBytesStable(t *testing.T) {
 	}
 }
 
-func TestIsUnsupportedDocumentURL(t *testing.T) {
+func TestIsSkippedAssetURL(t *testing.T) {
 	tests := []struct {
 		raw  string
 		want bool
 	}{
 		{raw: "https://example.com/wp-content/uploads/photo.jpg", want: true},
-		{raw: "https://example.com/downloads/file.pdf?x=1", want: true},
+		{raw: "https://example.com/downloads/file.pdf?x=1", want: false},
 		{raw: "https://example.com/articles/story", want: false},
 		{raw: "https://example.com/articles/story.html", want: false},
 	}
@@ -61,10 +61,20 @@ func TestIsUnsupportedDocumentURL(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := isUnsupportedDocumentURL(u); got != tt.want {
-				t.Fatalf("isUnsupportedDocumentURL() = %v, want %v", got, tt.want)
+			if got := isSkippedAssetURL(u); got != tt.want {
+				t.Fatalf("isSkippedAssetURL() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIsPDFURL(t *testing.T) {
+	u, err := normalizeURL("https://example.com/files/menu.PDF?download=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isPDFURL(u) {
+		t.Fatal("expected PDF URL")
 	}
 }
 

@@ -128,6 +128,45 @@ func compactText(text string) string {
 	return strings.Join(strings.Fields(text), " ")
 }
 
+func extractPDFLinks(renderedHTML string, baseURL string) []*url.URL {
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return nil
+	}
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(renderedHTML))
+	if err != nil {
+		return nil
+	}
+	seen := make(map[string]*url.URL)
+	doc.Find("a[href], area[href]").Each(func(_ int, sel *goquery.Selection) {
+		href, ok := sel.Attr("href")
+		if !ok {
+			return
+		}
+		link, err := normalizeURL(href)
+		if err != nil {
+			rel, relErr := url.Parse(strings.TrimSpace(href))
+			if relErr != nil {
+				return
+			}
+			resolved := base.ResolveReference(rel)
+			link, err = normalizeURL(resolved.String())
+			if err != nil {
+				return
+			}
+		}
+		if !isPDFURL(link) {
+			return
+		}
+		seen[link.String()] = link
+	})
+	out := make([]*url.URL, 0, len(seen))
+	for _, link := range seen {
+		out = append(out, link)
+	}
+	return out
+}
+
 func cleanMarkdown(value string) string {
 	lines := strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n")
 	out := make([]string, 0, len(lines))
