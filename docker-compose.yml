@@ -48,6 +48,28 @@ services:
       REQUEST_TIMEOUT: 15s
     restart: unless-stopped
 
+  parser:
+    build:
+      context: ./parser
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      REDIS_ADDR: redis:6379
+      POSTGRES_DSN: postgres://unicrawler:unicrawler@postgres:5432/unicrawler?sslmode=disable
+      INPUT_QUEUE: mapper:out
+      OUTPUT_QUEUE: parser:out
+      WORKERS: "8"
+      REDIS_POOL_SIZE: "16"
+      REQUEST_TIMEOUT: 30s
+      RENDER_TIMEOUT: 60s
+      MAX_RETRIES: "2"
+      USER_AGENT: UniCrawlerParser/0.1
+    shm_size: "1gb"
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   redis-data:
