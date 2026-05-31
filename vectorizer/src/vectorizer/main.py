@@ -124,20 +124,21 @@ def recover_processing_queue(runtime: Runtime) -> None:
             break
 
 
-def process_processing_item(runtime: Runtime, raw: str) -> None:
+def process_processing_item(runtime: Runtime, raw: str | bytes) -> None:
+    raw_value = raw.decode() if isinstance(raw, bytes) else raw
     try:
-        process_message_with_retry(runtime, raw)
+        process_message_with_retry(runtime, raw_value)
     except RedisError:
         raise
     except Exception:
-        logger.exception("message failed", extra={"_raw": raw})
-        runtime.redis.lrem(runtime.cfg.processing_queue, 1, raw)
-        runtime.redis.lpush(runtime.cfg.failed_queue, raw)
+        logger.exception("message failed", extra={"_raw": raw_value})
+        runtime.redis.lrem(runtime.cfg.processing_queue, 1, raw_value)
+        runtime.redis.lpush(runtime.cfg.failed_queue, raw_value)
     else:
-        runtime.redis.lrem(runtime.cfg.processing_queue, 1, raw)
+        runtime.redis.lrem(runtime.cfg.processing_queue, 1, raw_value)
 
 
-def process_message_with_retry(runtime: Runtime, raw: str) -> None:
+def process_message_with_retry(runtime: Runtime, raw: str | bytes) -> None:
     @retry(
         stop=stop_after_attempt(runtime.cfg.max_retries),
         wait=wait_exponential(
@@ -153,7 +154,7 @@ def process_message_with_retry(runtime: Runtime, raw: str) -> None:
     _process()
 
 
-def process_message(runtime: Runtime, raw: str) -> None:
+def process_message(runtime: Runtime, raw: str | bytes) -> None:
     message = parse_message(raw)
     document = runtime.store.get_document_version(message)
     if document is None:

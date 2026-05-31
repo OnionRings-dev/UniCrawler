@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
+from typing import TypeVar
 
 from fastembed import TextEmbedding
 from openai import OpenAI
@@ -48,7 +49,9 @@ def make_embedder(provider: str, model: str, openai_api_key: str | None) -> Embe
     raise ValueError(f"unsupported EMBEDDING_PROVIDER: {provider}")
 
 
-def batched(items: list[str], size: int) -> Iterable[list[str]]:
-    for start in range(0, len(items), size):
-        yield items[start : start + size]
+T = TypeVar("T")
 
+
+def batched(items: Sequence[T], size: int) -> Iterable[list[T]]:
+    for start in range(0, len(items), size):
+        yield list(items[start : start + size])

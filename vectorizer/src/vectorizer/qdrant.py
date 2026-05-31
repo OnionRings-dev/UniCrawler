@@ -19,7 +19,7 @@ class QdrantSink:
         self,
         url: str,
         api_key: str | None,
-        timeout: float,
+        timeout: int,
         collection_prefix: str,
         collection_scope: str,
         embedder: Embedder,

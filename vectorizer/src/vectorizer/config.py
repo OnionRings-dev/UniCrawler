@@ -17,7 +17,7 @@ class Config:
     postgres_dsn: str
     qdrant_url: str
     qdrant_api_key: str | None
-    qdrant_timeout: float
+    qdrant_timeout: int
     collection_prefix: str
     collection_scope: str
     embedding_provider: str
@@ -59,7 +59,7 @@ def load_config() -> Config:
         ),
         qdrant_url=env_string("QDRANT_URL", "http://qdrant:6333"),
         qdrant_api_key=env_optional("QDRANT_API_KEY"),
-        qdrant_timeout=env_float("QDRANT_TIMEOUT", 30.0),
+        qdrant_timeout=env_int("QDRANT_TIMEOUT", 30),
         collection_prefix=env_string("COLLECTION_PREFIX", "unicrawler"),
         collection_scope=env_string("COLLECTION_SCOPE", "domain").lower(),
         embedding_provider=provider,
