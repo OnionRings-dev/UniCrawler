@@ -1,0 +1,29 @@
+[project]
+name = "vectorizer"
+version = "0.1.0"
+description = "Redis to Qdrant vectorization node for UniCrawler"
+authors = [
+    { name = "TeoBale", email = "matteo.balestriero@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastembed>=0.8.0",
+    "openai>=2.38.0",
+    "psycopg[binary,pool]>=3.3.4",
+    "qdrant-client>=1.18.0",
+    "redis>=8.0.0",
+    "tenacity>=9.1.4",
+    "tiktoken>=0.13.0",
+]
+
+[project.scripts]
+vectorizer = "vectorizer.main:main"
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
