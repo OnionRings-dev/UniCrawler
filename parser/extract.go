@@ -36,6 +36,12 @@ func extractContent(renderedHTML string, finalURL string) (extractedContent, err
 		return extractedContent{}, errors.New("empty readable content")
 	}
 	converter := md.NewConverter(base.String(), true, nil)
+	converter.AddRules(md.Rule{
+		Filter: []string{"img"},
+		Replacement: func(_ string, _ *goquery.Selection, _ *md.Options) *string {
+			return md.String("")
+		},
+	})
 	markdown, err := converter.ConvertString(content)
 	if err != nil {
 		return extractedContent{}, err

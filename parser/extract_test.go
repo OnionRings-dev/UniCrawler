@@ -45,6 +45,32 @@ func TestExtractContentRemovesCookieConsent(t *testing.T) {
 	}
 }
 
+func TestExtractContentIgnoresImages(t *testing.T) {
+	raw := `<html>
+		<head><title>Illustrated article</title></head>
+		<body>
+			<main>
+				<article>
+					<h1>Illustrated article</h1>
+					<p>Useful text before the image.</p>
+					<img src="/hero.jpg" alt="Hero image">
+					<p>Useful text after the image.</p>
+				</article>
+			</main>
+		</body>
+	</html>`
+	got, err := extractContent(raw, "https://example.com/articles/images")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got.Markdown, "![") || strings.Contains(got.Markdown, "hero.jpg") || strings.Contains(got.Markdown, "Hero image") {
+		t.Fatalf("markdown contains image content:\n%s", got.Markdown)
+	}
+	if !strings.Contains(got.Markdown, "Useful text before the image.") || !strings.Contains(got.Markdown, "Useful text after the image.") {
+		t.Fatalf("markdown missing article text:\n%s", got.Markdown)
+	}
+}
+
 func TestLooksLikeCookieConsent(t *testing.T) {
 	cookie := "Consenso Cookie Utilizziamo i cookie. Impostazioni cookie Accetta tutto"
 	if !looksLikeCookieConsent(cookie) {
