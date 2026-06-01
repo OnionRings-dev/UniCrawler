@@ -78,7 +78,15 @@ The node uses `BRPOPLPUSH` to move messages from `INPUT_QUEUE` to `PROCESSING_QU
 - `EMBEDDING_PROVIDER`, default `fastembed`
 - `EMBEDDING_MODEL`, provider-specific default
 - `BATCH_SIZE`, default `32`
+- `OVERSIZED_QUEUE`, default `vectorizer:oversized`; oversized-document audit events
+- `MAX_DOCUMENT_CHARS`, default `0`; optional hard character cap before chunking
+- `MAX_CHUNKS_PER_DOCUMENT`, default `1000`; max direct content chunks for oversized documents
+- `SUMMARY_GROUP_CHUNKS`, default `40`; source chunks covered by each section summary
+- `MAX_SUMMARY_CHUNKS`, default `500`; max section summaries for very large documents
+- `SUMMARY_TOKENS`, default `450`; token budget for extractive summary chunks
 - `MAX_RETRIES`, default `3`
+
+Oversized documents are not simply truncated. The vectorizer first removes exact duplicate Markdown blocks, then chunks the full deduplicated text. If the document still exceeds `MAX_CHUNKS_PER_DOCUMENT`, it indexes representative content chunks plus document/section summary chunks covering the full source chunk range, and writes an audit payload to `OVERSIZED_QUEUE`.
 
 ## Local Development
 

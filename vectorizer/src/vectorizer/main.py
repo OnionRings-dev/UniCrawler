@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import signal
 import time
@@ -14,6 +15,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from vectorizer.chunking import MarkdownChunker
 from vectorizer.config import Config, load_config
 from vectorizer.embeddings import make_embedder
+from vectorizer.hierarchy import PreparedChunks, prepare_chunks
 from vectorizer.logging import configure_logging
 from vectorizer.messages import parse_message
 from vectorizer.qdrant import QdrantSink
@@ -42,7 +44,6 @@ def main() -> None:
         db=cfg.redis_db,
         decode_responses=True,
         health_check_interval=30,
-        retry_on_timeout=True,
         socket_connect_timeout=5,
         socket_timeout=cfg.redis_socket_timeout,
     )
@@ -168,15 +169,43 @@ def process_message(runtime: Runtime, raw: str | bytes) -> None:
         )
         return
 
-    chunks = runtime.chunker.split(document.markdown)
-    if not chunks:
+    prepared = prepare_chunks(document.markdown, runtime.chunker, runtime.cfg)
+    if not prepared.chunks:
         logger.warning(
             "document produced no chunks",
             extra={"_document_id": document.document_id, "_url": document.url},
         )
         return
 
-    collection = runtime.sink.upsert_document(document, chunks)
+    if prepared.dedup.removed_blocks > 0:
+        logger.info(
+            "document markdown deduplicated",
+            extra={
+                "_document_id": document.document_id,
+                "_url": document.url,
+                "_original_blocks": prepared.dedup.original_blocks,
+                "_removed_blocks": prepared.dedup.removed_blocks,
+                "_original_chars": prepared.dedup.original_chars,
+                "_deduped_chars": prepared.dedup.deduped_chars,
+            },
+        )
+
+    if prepared.oversized:
+        logger.warning(
+            "document is oversized; using hierarchical indexing",
+            extra={
+                "_document_id": document.document_id,
+                "_url": document.url,
+                "_original_chunks": prepared.original_chunk_count,
+                "_indexed_content_chunks": prepared.indexed_content_chunks,
+                "_indexed_summary_chunks": prepared.indexed_summary_chunks,
+                "_indexed_chunks": len(prepared.chunks),
+            },
+        )
+
+    collection = runtime.sink.upsert_document(document, prepared.chunks)
+    if prepared.oversized:
+        publish_oversized_event(runtime, prepared, document.url, document.document_id)
     logger.info(
         "document vectorized",
         extra={
@@ -184,9 +213,33 @@ def process_message(runtime: Runtime, raw: str | bytes) -> None:
             "_version_id": document.version_id,
             "_url": document.url,
             "_collection": collection,
-            "_chunks": len(chunks),
+            "_chunks": len(prepared.chunks),
+            "_oversized": prepared.oversized,
         },
     )
+
+
+def publish_oversized_event(
+    runtime: Runtime,
+    prepared: PreparedChunks,
+    url: str,
+    document_id: int,
+) -> None:
+    payload = {
+        "document_id": document_id,
+        "url": url,
+        "original_chunks": prepared.original_chunk_count,
+        "indexed_content_chunks": prepared.indexed_content_chunks,
+        "indexed_summary_chunks": prepared.indexed_summary_chunks,
+        "indexed_chunks": len(prepared.chunks),
+        "original_chars": prepared.dedup.original_chars,
+        "deduped_chars": prepared.dedup.deduped_chars,
+        "removed_blocks": prepared.dedup.removed_blocks,
+    }
+    try:
+        runtime.redis.lpush(runtime.cfg.oversized_queue, json.dumps(payload, ensure_ascii=False))
+    except RedisError:
+        logger.warning("oversized audit event publish failed", exc_info=True)
 
 
 def install_signal_handlers(runtime: Runtime) -> None:

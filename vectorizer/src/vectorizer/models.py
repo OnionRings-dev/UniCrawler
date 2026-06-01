@@ -42,4 +42,6 @@ class Chunk:
     end_token: int
     headings: tuple[str, ...]
     content_hash: str
-
+    kind: str = "content"
+    source_chunk_start: int | None = None
+    source_chunk_end: int | None = None

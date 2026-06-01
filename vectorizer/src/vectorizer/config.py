@@ -12,6 +12,7 @@ class Config:
     input_queue: str
     processing_queue: str
     failed_queue: str
+    oversized_queue: str
     queue_block_time: int
     redis_socket_timeout: float
     postgres_dsn: str
@@ -27,6 +28,11 @@ class Config:
     chunk_tokens: int
     chunk_overlap_tokens: int
     min_chunk_tokens: int
+    max_document_chars: int
+    max_chunks_per_document: int
+    summary_group_chunks: int
+    max_summary_chunks: int
+    summary_tokens: int
     max_retries: int
     retry_backoff_seconds: float
 
@@ -51,6 +57,7 @@ def load_config() -> Config:
         input_queue=env_string("INPUT_QUEUE", "parser:out"),
         processing_queue=env_string("PROCESSING_QUEUE", "vectorizer:processing"),
         failed_queue=env_string("FAILED_QUEUE", "vectorizer:failed"),
+        oversized_queue=env_string("OVERSIZED_QUEUE", "vectorizer:oversized"),
         queue_block_time=queue_block_time,
         redis_socket_timeout=env_float("REDIS_SOCKET_TIMEOUT", queue_block_time + 10.0),
         postgres_dsn=env_string(
@@ -69,6 +76,11 @@ def load_config() -> Config:
         chunk_tokens=chunk_tokens,
         chunk_overlap_tokens=overlap,
         min_chunk_tokens=env_int("MIN_CHUNK_TOKENS", 40),
+        max_document_chars=env_int("MAX_DOCUMENT_CHARS", 0),
+        max_chunks_per_document=env_int("MAX_CHUNKS_PER_DOCUMENT", 1000),
+        summary_group_chunks=env_int("SUMMARY_GROUP_CHUNKS", 40),
+        max_summary_chunks=env_int("MAX_SUMMARY_CHUNKS", 500),
+        summary_tokens=env_int("SUMMARY_TOKENS", 450),
         max_retries=env_int("MAX_RETRIES", 3),
         retry_backoff_seconds=env_float("RETRY_BACKOFF_SECONDS", 2.0),
     )

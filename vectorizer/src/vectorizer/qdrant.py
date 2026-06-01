@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import uuid
+import logging
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -12,6 +13,7 @@ from vectorizer.models import Chunk, DocumentVersion
 
 COLLECTION_SAFE_RE = re.compile(r"[^a-zA-Z0-9_-]+")
 POINT_NAMESPACE = uuid.UUID("f548adfb-5273-4e28-bd11-458b287c8e12")
+logger = logging.getLogger("vectorizer.qdrant")
 
 
 class QdrantSink:
@@ -40,7 +42,19 @@ class QdrantSink:
         collection = self.collection_for(document)
         self.ensure_collection(collection)
 
-        for chunk_batch in batched(chunks, self.batch_size):
+        total_batches = (len(chunks) + self.batch_size - 1) // self.batch_size
+        for batch_index, chunk_batch in enumerate(batched(chunks, self.batch_size), start=1):
+            logger.info(
+                "upserting chunk batch",
+                extra={
+                    "_document_id": document.document_id,
+                    "_collection": collection,
+                    "_batch": batch_index,
+                    "_batches": total_batches,
+                    "_batch_chunks": len(chunk_batch),
+                    "_total_chunks": len(chunks),
+                },
+            )
             texts = [chunk.text for chunk in chunk_batch]
             vectors = self.embedder.embed(texts)
             points = [
@@ -54,6 +68,7 @@ class QdrantSink:
             self.client.upsert(collection_name=collection, points=points, wait=True)
 
         self.delete_stale_versions(collection, document)
+        self.delete_surplus_current_version(collection, document, len(chunks))
         return collection
 
     def collection_for(self, document: DocumentVersion) -> str:
@@ -92,7 +107,7 @@ class QdrantSink:
         self._ready_collections.add(name)
 
     def create_payload_indexes(self, name: str) -> None:
-        for field in ("document_id", "content_hash", "url", "document_type"):
+        for field in ("document_id", "content_hash", "url", "document_type", "chunk_kind"):
             try:
                 schema = models.PayloadSchemaType.INTEGER
                 if field != "document_id":
@@ -128,6 +143,35 @@ class QdrantSink:
             wait=True,
         )
 
+    def delete_surplus_current_version(
+        self,
+        collection: str,
+        document: DocumentVersion,
+        chunk_count: int,
+    ) -> None:
+        self.client.delete(
+            collection_name=collection,
+            points_selector=models.FilterSelector(
+                filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="document_id",
+                            match=models.MatchValue(value=document.document_id),
+                        ),
+                        models.FieldCondition(
+                            key="content_hash",
+                            match=models.MatchValue(value=document.content_hash),
+                        ),
+                        models.FieldCondition(
+                            key="chunk_id",
+                            range=models.Range(gte=float(chunk_count)),
+                        ),
+                    ],
+                )
+            ),
+            wait=True,
+        )
+
 
 def collection_name(prefix: str, endpoint: str) -> str:
     raw = f"{prefix}_{endpoint}".strip().lower()
@@ -149,10 +193,13 @@ def payload_for(document: DocumentVersion, chunk: Chunk, embedding_model: str) -
         "version_id": document.version_id,
         "content_hash": document.content_hash,
         "chunk_id": chunk.index,
+        "chunk_kind": chunk.kind,
         "chunk_hash": chunk.content_hash,
         "chunk_tokens": chunk.token_count,
         "chunk_start_token": chunk.start_token,
         "chunk_end_token": chunk.end_token,
+        "source_chunk_start": chunk.source_chunk_start,
+        "source_chunk_end": chunk.source_chunk_end,
         "text": chunk.text,
         "headings": list(chunk.headings),
         "url": document.url,
