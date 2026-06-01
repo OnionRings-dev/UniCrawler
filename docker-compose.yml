@@ -152,6 +152,7 @@ services:
       VECTORIZER_FAILED_QUEUE: vectorizer:failed
       VECTORIZER_OVERSIZED_QUEUE: vectorizer:oversized
       REPLAY_BATCH_SIZE: "1000"
+      PORT: 8080
     ports:
       - "${MONITOR_PORT:-8080}:8080"
     restart: unless-stopped

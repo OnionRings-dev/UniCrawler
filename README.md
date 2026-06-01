@@ -65,6 +65,9 @@ POSTGRES_DB=my_db POSTGRES_PORT=5433 docker compose up -d
 # Redis settings
 REDIS_PORT=6380 REDIS_PASSWORD=secret docker compose up -d
 
+# Monitor settings
+MONITOR_PORT=8081 docker compose up -d
+
 # OpenAI embeddings instead of local FastEmbed
 EMBEDDING_PROVIDER=openai EMBEDDING_MODEL=text-embedding-3-small OPENAI_API_KEY=... docker compose up -d --build
 ```
