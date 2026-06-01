@@ -63,8 +63,10 @@ Redis visited sets are runtime de-duplication state. If you intentionally want t
 
 Environment variables:
 
-- `REDIS_ADDR`, default `redis:6379`
-- `POSTGRES_DSN`, default `postgres://${POSTGRES_USER:-unicrawler}:${POSTGRES_PASSWORD:-unicrawler}@postgres:5432/${POSTGRES_DB:-unicrawler}?sslmode=disable` (configured in `docker-compose.yml`)
+- `REDIS_ADDR`, default `redis:6379` (parameterized in `docker-compose.yml`)
+- `REDIS_PASSWORD`, default empty
+- `REDIS_DB`, default `0`
+- `POSTGRES_DSN`, default `postgres://unicrawler:unicrawler@postgres:5432/unicrawler?sslmode=disable` (configured via env in `docker-compose.yml`)
 - `INPUT_QUEUE`, default `mapper:in`
 - `OUTPUT_QUEUE`, default `mapper:out`
 - `WORKERS`, default `128`

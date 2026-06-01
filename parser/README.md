@@ -65,11 +65,11 @@ The parser extends the existing database with:
 
 Environment variables:
 
-- `REDIS_ADDR`, default `redis:6379`
+- `REDIS_ADDR`, default `redis:6379` (parameterized in `docker-compose.yml`)
 - `REDIS_PASSWORD`, default empty
 - `REDIS_DB`, default `0`
 - `REDIS_POOL_SIZE`, default `WORKERS * 2`
-- `POSTGRES_DSN`, default `postgres://${POSTGRES_USER:-unicrawler}:${POSTGRES_PASSWORD:-unicrawler}@postgres:5432/${POSTGRES_DB:-unicrawler}?sslmode=disable` (configured in `docker-compose.yml`)
+- `POSTGRES_DSN`, default `postgres://unicrawler:unicrawler@postgres:5432/unicrawler?sslmode=disable` (configured via env in `docker-compose.yml`)
 - `INPUT_QUEUE`, default `mapper:out`
 - `OUTPUT_QUEUE`, default `parser:out`
 - `WORKERS`, default `8`
