@@ -132,6 +132,30 @@ services:
       - vectorizer-cache:/root/.cache
     restart: unless-stopped
 
+  monitor:
+    build:
+      context: ./monitor
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: ${REDIS_DB:-0}
+      POSTGRES_DSN: postgres://${POSTGRES_USER:-unicrawler}:${POSTGRES_PASSWORD:-unicrawler}@postgres:5432/${POSTGRES_DB:-unicrawler}?sslmode=disable
+      MAPPER_INPUT_QUEUE: mapper:in
+      MAPPER_OUTPUT_QUEUE: mapper:out
+      PARSER_OUTPUT_QUEUE: parser:out
+      VECTORIZER_PROCESSING_QUEUE: vectorizer:processing
+      VECTORIZER_FAILED_QUEUE: vectorizer:failed
+      VECTORIZER_OVERSIZED_QUEUE: vectorizer:oversized
+      REPLAY_BATCH_SIZE: "1000"
+    ports:
+      - "${MONITOR_PORT:-8080}:8080"
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   redis-data:

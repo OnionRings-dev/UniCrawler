@@ -7,6 +7,7 @@ Redis-driven crawling pipeline with a mapper, parser, and vectorizer backed by P
 - **Mapper** (`mapper/`): crawls a seed URL, de-duplicates same-domain links, stores sitemaps in Postgres, and publishes URLs to `mapper:out`. See [mapper/README.md](mapper/README.md).
 - **Parser** (`parser/`): renders pages (including JS), extracts readable content, versions Markdown in Postgres, and publishes changed documents to `parser:out`. See [parser/README.md](parser/README.md).
 - **Vectorizer** (`vectorizer/`): consumes changed parser events, loads Markdown versions from Postgres, chunks and embeds them, and upserts retrieval-ready points into Qdrant collections per endpoint/domain. See [vectorizer/README.md](vectorizer/README.md).
+- **Monitor** (`monitor/`): small FastAPI web/API service for queue status, domain/run inspection, mapper enqueue, and replay of already mapped domains.
 
 ## Data flow
 
@@ -18,10 +19,28 @@ Redis-driven crawling pipeline with a mapper, parser, and vectorizer backed by P
 docker compose up --build
 ```
 
+Open the monitor at [http://localhost:8080](http://localhost:8080). It shows Redis queue lengths, Postgres counters, recent domains/runs, and forms for adding seeds or replaying a mapped domain into the parser queue.
+
 Seed a crawl:
 
 ```sh
 docker compose exec redis redis-cli LPUSH mapper:in https://example.com/
+```
+
+Or use the monitor API:
+
+```sh
+curl -X POST http://localhost:8080/api/enqueue \
+  -H 'content-type: application/json' \
+  -d '{"url":"https://example.com/"}'
+```
+
+Replay a stored sitemap into `mapper:out` without crawling again:
+
+```sh
+curl -X POST http://localhost:8080/api/replay \
+  -H 'content-type: application/json' \
+  -d '{"domain":"example.com"}'
 ```
 
 Read parsed output before the vectorizer consumes it:
