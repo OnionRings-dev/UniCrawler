@@ -69,7 +69,7 @@ Environment variables:
 - `REDIS_PASSWORD`, default empty
 - `REDIS_DB`, default `0`
 - `REDIS_POOL_SIZE`, default `WORKERS * 2`
-- `POSTGRES_DSN`, default `postgres://unicrawler:unicrawler@postgres:5432/unicrawler?sslmode=disable`
+- `POSTGRES_DSN`, default `postgres://${POSTGRES_USER:-unicrawler}:${POSTGRES_PASSWORD:-unicrawler}@postgres:5432/${POSTGRES_DB:-unicrawler}?sslmode=disable` (configured in `docker-compose.yml`)
 - `INPUT_QUEUE`, default `mapper:out`
 - `OUTPUT_QUEUE`, default `parser:out`
 - `WORKERS`, default `8`

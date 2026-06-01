@@ -70,10 +70,10 @@ The node uses `BRPOPLPUSH` to move messages from `INPUT_QUEUE` to `PROCESSING_QU
 - `FAILED_QUEUE`, default `vectorizer:failed`
 - `QUEUE_BLOCK_TIME`, default `5`
 - `REDIS_SOCKET_TIMEOUT`, default `QUEUE_BLOCK_TIME + 10`
-- `POSTGRES_DSN`, default `postgres://unicrawler:unicrawler@postgres:5432/unicrawler?sslmode=disable`
-- `QDRANT_URL`, default `http://qdrant:6333`
+- `POSTGRES_DSN`, default `postgres://${POSTGRES_USER:-unicrawler}:${POSTGRES_PASSWORD:-unicrawler}@postgres:5432/${POSTGRES_DB:-unicrawler}?sslmode=disable` (configured in `docker-compose.yml`)
+- `QDRANT_URL`, default `${QDRANT_URL:-http://qdrant:6333}`
 - `QDRANT_API_KEY`, optional
-- `COLLECTION_PREFIX`, default `unicrawler`
+- `COLLECTION_PREFIX`, default `${COLLECTION_PREFIX:-unicrawler}`
 - `COLLECTION_SCOPE`, default `domain`
 - `EMBEDDING_PROVIDER`, default `fastembed`
 - `EMBEDDING_MODEL`, provider-specific default

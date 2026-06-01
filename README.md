@@ -34,15 +34,16 @@ docker compose exec redis redis-cli BRPOP parser:out 0
 
 ## Configuration
 
-Most settings are environment variables in `docker-compose.yml`. Override at runtime as needed:
+Most settings are environment variables in `docker-compose.yml`. You can use a `.env` file (see `.env.example`) or override them at runtime:
 
 ```sh
+# Scaling and processing
 PARSER_REPLICAS=2 PARSER_WORKERS=4 PARSER_REDIS_POOL_SIZE=8 docker compose up -d --build
-```
 
-Use OpenAI embeddings instead of the default local FastEmbed model:
+# Database settings
+POSTGRES_DB=my_db POSTGRES_PORT=5433 docker compose up -d
 
-```sh
+# OpenAI embeddings instead of local FastEmbed
 EMBEDDING_PROVIDER=openai EMBEDDING_MODEL=text-embedding-3-small OPENAI_API_KEY=... docker compose up -d --build
 ```
 

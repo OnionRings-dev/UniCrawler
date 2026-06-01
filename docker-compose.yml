@@ -2,15 +2,15 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: unicrawler
-      POSTGRES_USER: unicrawler
-      POSTGRES_PASSWORD: unicrawler
+      POSTGRES_DB: ${POSTGRES_DB:-unicrawler}
+      POSTGRES_USER: ${POSTGRES_USER:-unicrawler}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-unicrawler}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U unicrawler -d unicrawler"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -47,7 +47,7 @@ services:
         condition: service_healthy
     environment:
       REDIS_ADDR: redis:6379
-      POSTGRES_DSN: postgres://unicrawler:unicrawler@postgres:5432/unicrawler?sslmode=disable
+      POSTGRES_DSN: postgres://${POSTGRES_USER:-unicrawler}:${POSTGRES_PASSWORD:-unicrawler}@postgres:5432/${POSTGRES_DB:-unicrawler}?sslmode=disable
       INPUT_QUEUE: mapper:in
       OUTPUT_QUEUE: mapper:out
       WORKERS: "128"
@@ -67,7 +67,7 @@ services:
         condition: service_healthy
     environment:
       REDIS_ADDR: redis:6379
-      POSTGRES_DSN: postgres://unicrawler:unicrawler@postgres:5432/unicrawler?sslmode=disable
+      POSTGRES_DSN: postgres://${POSTGRES_USER:-unicrawler}:${POSTGRES_PASSWORD:-unicrawler}@postgres:5432/${POSTGRES_DB:-unicrawler}?sslmode=disable
       INPUT_QUEUE: mapper:out
       OUTPUT_QUEUE: parser:out
       WORKERS: "${PARSER_WORKERS:-4}"
@@ -94,14 +94,14 @@ services:
         condition: service_started
     environment:
       REDIS_ADDR: redis:6379
-      POSTGRES_DSN: postgres://unicrawler:unicrawler@postgres:5432/unicrawler?sslmode=disable
-      QDRANT_URL: http://qdrant:6333
+      POSTGRES_DSN: postgres://${POSTGRES_USER:-unicrawler}:${POSTGRES_PASSWORD:-unicrawler}@postgres:5432/${POSTGRES_DB:-unicrawler}?sslmode=disable
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       INPUT_QUEUE: parser:out
       PROCESSING_QUEUE: vectorizer:processing
       FAILED_QUEUE: vectorizer:failed
       OVERSIZED_QUEUE: vectorizer:oversized
       REDIS_SOCKET_TIMEOUT: "15"
-      COLLECTION_PREFIX: unicrawler
+      COLLECTION_PREFIX: ${COLLECTION_PREFIX:-unicrawler}
       COLLECTION_SCOPE: domain
       EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-fastembed}"
       EMBEDDING_MODEL: "${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}"
