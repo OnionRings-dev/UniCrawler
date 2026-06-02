@@ -72,6 +72,24 @@ MONITOR_PORT=8081 docker compose up -d
 EMBEDDING_PROVIDER=openai EMBEDDING_MODEL=text-embedding-3-small OPENAI_API_KEY=... docker compose up -d --build
 ```
 
+### Dokploy domain setup
+
+For Dokploy, point the domain to the `monitor` service and to the same container
+port configured with `MONITOR_PORT` (default `8080`). If you set
+`MONITOR_PORT=8081`, configure the Dokploy domain with:
+
+```txt
+serviceName: monitor
+port: 8081
+```
+
+Dokploy routes domain traffic to the container port, not to the host-published
+port. The `ports` section is only useful for direct access like
+`http://server-ip:8081`; it is not the setting that makes the domain work. If
+another service on the host already uses `8080`, set `MONITOR_PORT=8081` (or any
+free port), redeploy the compose application, then redeploy again after adding
+or changing the domain in Dokploy.
+
 ## Storage
 
 Postgres stores crawled sitemaps and parsed document versions in the `unicrawler` database. Qdrant stores vector collections partitioned by endpoint/domain for future RAG retrieval. Docker Compose provisions persistent volumes for Postgres, Redis, Qdrant, and the vectorizer model cache.
