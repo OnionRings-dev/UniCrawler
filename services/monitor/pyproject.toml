@@ -1,0 +1,22 @@
+[project]
+name = "monitor"
+version = "0.1.0"
+description = "Small FastAPI monitor for the UniCrawler pipeline"
+authors = [
+    { name = "TeoBale", email = "matteo.balestriero@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.124.0",
+    "psycopg[binary]>=3.3.4",
+    "python-multipart>=0.0.20",
+    "redis>=8.0.0",
+    "uvicorn[standard]>=0.38.0",
+]
+
+[project.scripts]
+monitor = "monitor.main:main"
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
