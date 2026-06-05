@@ -15,6 +15,20 @@ services:
       timeout: 3s
       retries: 10
 
+  db-migrate:
+    build:
+      context: ./db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-unicrawler}
+      POSTGRES_USER: ${POSTGRES_USER:-unicrawler}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-unicrawler}
+    restart: "no"
+
   redis:
     image: redis:7.2-alpine
     command:
@@ -38,69 +52,94 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.18.1
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
     volumes:
       - qdrant-data:/qdrant/storage
     restart: unless-stopped
 
   mapper:
     build:
-      context: ./mapper
+      context: .
+      dockerfile: services/mapper/Dockerfile
     depends_on:
       redis:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     environment:
       REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       REDIS_DB: ${REDIS_DB:-0}
+      REDIS_POOL_SIZE: ${MAPPER_REDIS_POOL_SIZE:-256}
       POSTGRES_DSN: postgres://${POSTGRES_USER:-unicrawler}:${POSTGRES_PASSWORD:-unicrawler}@postgres:5432/${POSTGRES_DB:-unicrawler}?sslmode=disable
-      INPUT_QUEUE: mapper:in
-      OUTPUT_QUEUE: mapper:out
-      WORKERS: "128"
-      REDIS_POOL_SIZE: "256"
-      SAME_DOMAIN_MODE: registrable
-      REDIS_BATCH_SIZE: "1000"
-      REQUEST_TIMEOUT: 15s
+      INPUT_QUEUE: ${MAPPER_INPUT_QUEUE:-mapper:in}
+      OUTPUT_QUEUE: ${MAPPER_OUTPUT_QUEUE:-mapper:out}
+      VISITED_PREFIX: ${MAPPER_VISITED_PREFIX:-mapper:visited}
+      WORKERS: ${MAPPER_WORKERS:-128}
+      SAME_DOMAIN_MODE: ${MAPPER_SAME_DOMAIN_MODE:-registrable}
+      MAX_PAGES_PER_SEED: ${MAPPER_MAX_PAGES_PER_SEED:-0}
+      REDIS_BATCH_SIZE: ${MAPPER_REDIS_BATCH_SIZE:-1000}
+      REQUEST_TIMEOUT: ${MAPPER_REQUEST_TIMEOUT:-15s}
+      IDLE_CONN_TIMEOUT: ${MAPPER_IDLE_CONN_TIMEOUT:-90s}
+      QUEUE_BLOCK_TIME: ${MAPPER_QUEUE_BLOCK_TIME:-5s}
+      USER_AGENT: ${MAPPER_USER_AGENT:-UniCrawlerMapper/0.1}
+      HTTP_ADDR: 0.0.0.0:8081
+    expose:
+      - "8081"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8081/healthz >/dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     restart: unless-stopped
 
   parser:
     build:
-      context: ./parser
+      context: .
+      dockerfile: services/parser/Dockerfile
     depends_on:
       redis:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     environment:
       REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       REDIS_DB: ${REDIS_DB:-0}
+      REDIS_POOL_SIZE: ${PARSER_REDIS_POOL_SIZE:-8}
       POSTGRES_DSN: postgres://${POSTGRES_USER:-unicrawler}:${POSTGRES_PASSWORD:-unicrawler}@postgres:5432/${POSTGRES_DB:-unicrawler}?sslmode=disable
-      INPUT_QUEUE: mapper:out
-      OUTPUT_QUEUE: parser:out
-      WORKERS: "${PARSER_WORKERS:-4}"
-      REDIS_POOL_SIZE: "${PARSER_REDIS_POOL_SIZE:-8}"
-      REQUEST_TIMEOUT: 30s
-      RENDER_TIMEOUT: 60s
-      MAX_PDF_BYTES: "52428800"
-      MAX_RETRIES: "2"
-      USER_AGENT: UniCrawlerParser/0.1
+      INPUT_QUEUE: ${MAPPER_OUTPUT_QUEUE:-mapper:out}
+      OUTPUT_QUEUE: ${PARSER_OUTPUT_QUEUE:-parser:out}
+      WORKERS: ${PARSER_WORKERS:-4}
+      REQUEST_TIMEOUT: ${PARSER_REQUEST_TIMEOUT:-30s}
+      RENDER_TIMEOUT: ${PARSER_RENDER_TIMEOUT:-60s}
+      MAX_PDF_BYTES: ${PARSER_MAX_PDF_BYTES:-52428800}
+      MAX_RETRIES: ${PARSER_MAX_RETRIES:-2}
+      USER_AGENT: ${PARSER_USER_AGENT:-UniCrawlerParser/0.1}
+      QUEUE_BLOCK_TIME: ${PARSER_QUEUE_BLOCK_TIME:-5s}
+      HTTP_ADDR: 0.0.0.0:8081
+    expose:
+      - "8081"
     shm_size: "1gb"
     deploy:
       replicas: ${PARSER_REPLICAS:-1}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8081/healthz >/dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     restart: unless-stopped
 
   vectorizer:
     build:
-      context: ./vectorizer
+      context: .
+      dockerfile: services/vectorizer/Dockerfile
     depends_on:
       redis:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       qdrant:
         condition: service_started
     environment:
@@ -109,50 +148,69 @@ services:
       REDIS_DB: ${REDIS_DB:-0}
       POSTGRES_DSN: postgres://${POSTGRES_USER:-unicrawler}:${POSTGRES_PASSWORD:-unicrawler}@postgres:5432/${POSTGRES_DB:-unicrawler}?sslmode=disable
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
-      INPUT_QUEUE: parser:out
-      PROCESSING_QUEUE: vectorizer:processing
-      FAILED_QUEUE: vectorizer:failed
-      OVERSIZED_QUEUE: vectorizer:oversized
-      REDIS_SOCKET_TIMEOUT: "15"
-      COLLECTION_PREFIX: ${COLLECTION_PREFIX:-unicrawler}
-      COLLECTION_SCOPE: domain
-      EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-fastembed}"
-      EMBEDDING_MODEL: "${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}"
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      CHUNK_TOKENS: "${VECTOR_CHUNK_TOKENS:-700}"
-      CHUNK_OVERLAP_TOKENS: "${VECTOR_CHUNK_OVERLAP_TOKENS:-100}"
-      MAX_DOCUMENT_CHARS: "${VECTOR_MAX_DOCUMENT_CHARS:-0}"
-      MAX_CHUNKS_PER_DOCUMENT: "${VECTOR_MAX_CHUNKS_PER_DOCUMENT:-1000}"
-      SUMMARY_GROUP_CHUNKS: "${VECTOR_SUMMARY_GROUP_CHUNKS:-40}"
-      MAX_SUMMARY_CHUNKS: "${VECTOR_MAX_SUMMARY_CHUNKS:-500}"
-      SUMMARY_TOKENS: "${VECTOR_SUMMARY_TOKENS:-450}"
-      BATCH_SIZE: "${VECTOR_BATCH_SIZE:-32}"
-      MAX_RETRIES: "${VECTOR_MAX_RETRIES:-3}"
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      INPUT_QUEUE: ${PARSER_OUTPUT_QUEUE:-parser:out}
+      PROCESSING_QUEUE: ${VECTORIZER_PROCESSING_QUEUE:-vectorizer:processing}
+      FAILED_QUEUE: ${VECTORIZER_FAILED_QUEUE:-vectorizer:failed}
+      OVERSIZED_QUEUE: ${VECTORIZER_OVERSIZED_QUEUE:-vectorizer:oversized}
+      QUEUE_BLOCK_TIME: ${VECTORIZER_QUEUE_BLOCK_TIME:-5}
+      REDIS_SOCKET_TIMEOUT: ${VECTORIZER_REDIS_SOCKET_TIMEOUT:-15}
+      COLLECTION_PREFIX: ${VECTORIZER_COLLECTION_PREFIX:-unicrawler}
+      COLLECTION_SCOPE: ${VECTORIZER_COLLECTION_SCOPE:-domain}
+      EMBEDDING_PROVIDER: ${VECTORIZER_EMBEDDING_PROVIDER:-fastembed}
+      EMBEDDING_MODEL: ${VECTORIZER_EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      CHUNK_TOKENS: ${VECTORIZER_CHUNK_TOKENS:-700}
+      CHUNK_OVERLAP_TOKENS: ${VECTORIZER_CHUNK_OVERLAP_TOKENS:-100}
+      MAX_DOCUMENT_CHARS: ${VECTORIZER_MAX_DOCUMENT_CHARS:-0}
+      MAX_CHUNKS_PER_DOCUMENT: ${VECTORIZER_MAX_CHUNKS_PER_DOCUMENT:-1000}
+      SUMMARY_GROUP_CHUNKS: ${VECTORIZER_SUMMARY_GROUP_CHUNKS:-40}
+      MAX_SUMMARY_CHUNKS: ${VECTORIZER_MAX_SUMMARY_CHUNKS:-500}
+      SUMMARY_TOKENS: ${VECTORIZER_SUMMARY_TOKENS:-450}
+      BATCH_SIZE: ${VECTORIZER_BATCH_SIZE:-32}
+      MAX_RETRIES: ${VECTORIZER_MAX_RETRIES:-3}
+      RETRY_BACKOFF_SECONDS: ${VECTORIZER_RETRY_BACKOFF_SECONDS:-2}
+      HTTP_ADDR: 0.0.0.0:8081
+    expose:
+      - "8081"
     volumes:
       - vectorizer-cache:/root/.cache
+    healthcheck:
+      test: ["CMD-SHELL", "python - <<'PY'\nfrom urllib.request import urlopen\nurlopen('http://127.0.0.1:8081/healthz', timeout=2).read()\nPY"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     restart: unless-stopped
 
   monitor:
     build:
-      context: ./monitor
+      context: .
+      dockerfile: services/monitor/Dockerfile
     depends_on:
       redis:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+      qdrant:
+        condition: service_started
     environment:
       REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       REDIS_DB: ${REDIS_DB:-0}
       POSTGRES_DSN: postgres://${POSTGRES_USER:-unicrawler}:${POSTGRES_PASSWORD:-unicrawler}@postgres:5432/${POSTGRES_DB:-unicrawler}?sslmode=disable
-      MAPPER_INPUT_QUEUE: mapper:in
-      MAPPER_OUTPUT_QUEUE: mapper:out
-      PARSER_OUTPUT_QUEUE: parser:out
-      VECTORIZER_PROCESSING_QUEUE: vectorizer:processing
-      VECTORIZER_FAILED_QUEUE: vectorizer:failed
-      VECTORIZER_OVERSIZED_QUEUE: vectorizer:oversized
-      REPLAY_BATCH_SIZE: "1000"
-      PORT: "${MONITOR_PORT:-8080}"
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      MAPPER_INPUT_QUEUE: ${MAPPER_INPUT_QUEUE:-mapper:in}
+      MAPPER_OUTPUT_QUEUE: ${MAPPER_OUTPUT_QUEUE:-mapper:out}
+      PARSER_OUTPUT_QUEUE: ${PARSER_OUTPUT_QUEUE:-parser:out}
+      VECTORIZER_PROCESSING_QUEUE: ${VECTORIZER_PROCESSING_QUEUE:-vectorizer:processing}
+      VECTORIZER_FAILED_QUEUE: ${VECTORIZER_FAILED_QUEUE:-vectorizer:failed}
+      VECTORIZER_OVERSIZED_QUEUE: ${VECTORIZER_OVERSIZED_QUEUE:-vectorizer:oversized}
+      MONITOR_REPLAY_BATCH_SIZE: ${MONITOR_REPLAY_BATCH_SIZE:-1000}
+      MONITOR_ADMIN_USERNAME: ${MONITOR_ADMIN_USERNAME:-admin}
+      MONITOR_ADMIN_PASSWORD_HASH: ${MONITOR_ADMIN_PASSWORD_HASH:-}
+      MONITOR_SESSION_SECRET: ${MONITOR_SESSION_SECRET:-change-me}
+      MONITOR_SECURE_COOKIES: ${MONITOR_SECURE_COOKIES:-false}
+      PORT: ${MONITOR_PORT:-8080}
     expose:
       - "${MONITOR_PORT:-8080}"
     ports:
